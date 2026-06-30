@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: matchvault
+      POSTGRES_PASSWORD: matchvault
+      POSTGRES_DB: matchvault
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://matchvault:matchvault@db:5432/matchvault
+      SECRET_KEY: dev-secret-change-in-production
+      NOMBA_API_KEY: ${NOMBA_API_KEY:-}
+      NOMBA_WEBHOOK_SECRET: ${NOMBA_WEBHOOK_SECRET:-}
+      API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-}
+      FRONTEND_URL: http://localhost:3000
+    depends_on:
+      - db
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  pgdata:

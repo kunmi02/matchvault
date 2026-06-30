@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.env
+.env.local
+*.egg-info/
+.venv/
+venv/
+dist/
+.next/
+pgdata/
+.DS_Store
+*.log
