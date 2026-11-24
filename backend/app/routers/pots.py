@@ -42,9 +42,7 @@ async def create_new_pot(
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
     pot = await create_pot(db, user.id, data)
-    pot.match = match
-    pot.participants = []
-    return pot_to_response(pot)
+    return pot_to_response(pot, match=match, participant_count=0)
 
 
 @router.get("/my", response_model=list[PotResponse])

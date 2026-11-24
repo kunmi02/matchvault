@@ -127,7 +127,12 @@ async def get_user_pots(db: AsyncSession, user_id: uuid.UUID) -> list[Pot]:
     return list(pots.values())
 
 
-def pot_to_response(pot: Pot) -> PotResponse:
+def pot_to_response(
+    pot: Pot,
+    *,
+    match: Match | None = None,
+    participant_count: int | None = None,
+) -> PotResponse:
     return PotResponse(
         id=pot.id,
         name=pot.name,
@@ -140,8 +145,8 @@ def pot_to_response(pot: Pot) -> PotResponse:
         status=pot.status,
         invite_code=pot.invite_code,
         invite_link=build_invite_link(pot.invite_code),
-        match=pot.match,
-        participant_count=len(pot.participants),
+        match=match if match is not None else pot.match,
+        participant_count=participant_count if participant_count is not None else len(pot.participants),
     )
 
 
