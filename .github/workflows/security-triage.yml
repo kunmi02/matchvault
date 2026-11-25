@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       issue_number:
-        description: GitHub issue number in this repository
+        description: GitHub issue number for single-issue triage
         type: string
-        required: true
+        required: false
+      issue_numbers:
+        description: Optional JSON array of issue numbers for batch triage
+        type: string
+        required: false
       decision:
         description: Reviewer decision
         type: choice
@@ -25,14 +29,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  triage:
+  prepare:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      issues: ${{ steps.parse.outputs.issues }}
+    steps:
+      - id: parse
+        shell: bash
+        env:
+          SINGLE: ${{ inputs.issue_number }}
+          BATCH: ${{ inputs.issue_numbers }}
+        run: |
+          if [[ -n "$BATCH" && -n "$SINGLE" ]]; then
+            echo "::error::Supply either issue_number or issue_numbers."
+            exit 1
+          fi
+          if [[ -z "$BATCH" ]]; then
+            BATCH=$(jq -cn --arg issue "$SINGLE" '[$issue]')
+          fi
+          issues=$(jq -ce '
+            if type != "array" or length < 1 or length > 20 then error("Select 1–20 issues") else . end
+            | map(tostring | if test("^[1-9][0-9]*$") then . else error("Invalid issue number") end)
+            | unique
+          ' <<< "$BATCH")
+          echo "issues=$issues" >> "$GITHUB_OUTPUT"
+
+  triage:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        issue: ${{ fromJSON(needs.prepare.outputs.issues) }}
     defaults:
       run:
         shell: bash
     env:
-      NUMBER: ${{ inputs.issue_number }}
+      NUMBER: ${{ matrix.issue }}
       DECISION: ${{ inputs.decision }}
       REASON: ${{ inputs.reason }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -57,43 +94,3 @@ jobs:
           state=$(jq -r .state <<< "$issue")
 
           if [[ "$DECISION" == false-positive ]]; then
-            [[ "$assigned" == false ]] || {
-              echo "Review and stop the existing agent task before marking false positive."
-              exit 1
-            }
-          else
-            [[ "$state" == open && "$suppressed" == false ]] || {
-              echo "Only an open, unsuppressed finding can be assigned."
-              exit 1
-            }
-          fi
-          echo "assigned=$assigned" >> "$GITHUB_OUTPUT"
-
-      - name: Save false-positive decision and close issue
-        if: inputs.decision == 'false-positive'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          endpoint="repos/$GITHUB_REPOSITORY/issues/$NUMBER"
-          jq -n '{labels:["security-false-positive"]}' |
-            gh api --method POST "$endpoint/labels" --input - > /dev/null
-          gh api --method PATCH "$endpoint" -f state=closed -f state_reason=not_planned > /dev/null
-
-      - name: Assign the confirmed issue to Copilot
-        if: inputs.decision == 'remediate' && steps.check.outputs.assigned == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.COPILOT_USER_TOKEN }}
-        run: |
-          : "${GH_TOKEN:?Configure the approved Copilot user token first}"
-          jq -n --arg repo "$GITHUB_REPOSITORY" --arg branch "$DEFAULT_BRANCH" --arg reason "$REASON" '
-            {
-              assignees: ["copilot-swe-agent[bot]"],
-              agent_assignment: {
-                target_repo: $repo,
-                base_branch: $branch,
-                custom_instructions: ("Fix the confirmed dependency advisory. Keep changes scoped, run the relevant tests, and link the issue in the PR. Reviewer context: " + $reason)
-              }
-            }
-          ' | gh api --method POST -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "repos/$GITHUB_REPOSITORY/issues/$NUMBER/assignees" --input - |
-            jq -e 'any(.assignees[]; .login == "copilot-swe-agent[bot]")' > /dev/null
