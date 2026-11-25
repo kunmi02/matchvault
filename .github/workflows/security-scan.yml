@@ -1,0 +1,71 @@
+name: Port dependency scan
+run-name: Dependency scan / Port ${{ inputs.port_run_id || 'manual' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      minimum_severity:
+        description: Minimum advisory severity to publish
+        type: choice
+        options: [low, moderate, high, critical]
+        default: high
+      port_run_id:
+        description: Optional Port run identifier for correlation
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: port-dependency-scan-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Run dependency audit
+        shell: bash
+        run: |
+          status=0
+          npm audit --json --package-lock-only --ignore-scripts --audit-level=low > npm-audit.json || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          node .github/scripts/publish-findings.mjs --validate npm-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit
+          path: npm-audit.json
+          retention-days: 1
+
+  publish:
+    needs: scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-audit
+          path: audit-results
+      - name: Publish findings and skip reviewed false positives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MINIMUM_SEVERITY: ${{ inputs.minimum_severity }}
+        run: node .github/scripts/publish-findings.mjs audit-results/npm-audit.json
